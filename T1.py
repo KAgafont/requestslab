@@ -1,76 +1,65 @@
 import requests
 import re
-import collections
-from bs4 import BeautifulSoup
+from collections import Counter
+import time
 
-def get_ip_country(ip_address):
-    """Определяет страну по IP-адресу, используя API ipwhois.io."""
+
+def get_html(url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Bot/1.0)"
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.text
+
+
+def extract_ips(html):
+    # Регулярное выражение для поиска IPv4 адресов
+    pattern = r'(\d{1,3}\.){3}\d{1,3}'
+    ips = re.findall(pattern, html)
+
+    # re.findall с группами возвращает кортежи, преобразуем в строки
+    ips = re.findall(r'(\d{1,3}(?:\.\d{1,3}){3})', html)
+
+    return set(ips)  # уникальные IP
+
+
+def get_country_by_ip(ip):
+    url = f"https://ipwhois.app/json/{ip}"
     try:
-        response = requests.get(f"https://ipwhois.io/{ip_address}")
-        response.raise_for_status()  # Проверка на ошибки HTTP
-        data = response.json()
+        resp = requests.get(url, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("success", True) is False:
+            return None
         return data.get("country")
-    except requests.exceptions.RequestException as e:
-        print(f"Ошибка запроса к API ipwhois.io: {e}")
-        return None
     except Exception as e:
-        print(f"Ошибка обработки ответа API: {e}")
+        print(f"Ошибка при запросе для IP {ip}: {e}")
         return None
 
 
-def analyze_wikipedia_editors(wiki_url):
-    """
-    Анализирует историю изменений страницы Wikipedia,
-    извлекает IP-адреса редакторов и определяет их страны.
-    """
-    try:
-        response = requests.get(wiki_url)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        print(f"Ошибка при получении страницы Wikipedia: {e}")
-        return
+def main():
+    url = "https://ru.wikipedia.org/w/index.php?title=JSON&action=history"
+    html = get_html(url)
 
-    soup = BeautifulSoup(response.text, 'html.parser')
+    ips = extract_ips(html)
+    print(f"Найдено уникальных IP: {len(ips)}")
 
-    # Поиск всех ссылок на историю изменений
-    history_links = soup.find_all('a', href=re.compile(r'/w/index.php\?title=.+&action=history'))
+    country_counter = Counter()
 
-    ip_addresses = []
-    for link in history_links:
-      history_url = 'https://en.wikipedia.org' + link['href']
-
-      response = requests.get(history_url)
-      response.raise_for_status()
-
-      soup = BeautifulSoup(response.text, 'xml') # ИЗМЕНЕНИЕ ЗДЕСЬ: Используем XML-парсер
-
-      # Находит все div блоки с классом "mw-changeslist-line"
-      change_lines = soup.find_all('div', class_='mw-changeslist-line')
-
-      for line in change_lines:
-          user_link = line.find('a', class_='mw-userlink')
-          if user_link:
-              href = user_link.get('href')
-              # Извлекаем IP-адрес из ссылки пользователя
-              ip_match = re.search(r'User:((\d{1,3}\.){3}\d{1,3})', href)
-              if ip_match:
-                  ip_addresses.append(ip_match.group(1))
-
-    if not ip_addresses:
-        print("IP-адреса не найдены.")
-        return
-
-    country_counts = collections.Counter()
-    for ip in ip_addresses:
-        country = get_ip_country(ip)
+    for ip in ips:
+        country = get_country_by_ip(ip)
         if country:
-            country_counts[country] += 1
+            country_counter[country] += 1
+            print(f"{ip} -> {country}")
+        else:
+            print(f"{ip} -> Страна не определена")
+        time.sleep(1)  # чтобы не перегружать API
 
-    print("\nРейтинг стран по количеству редакторов:")
-    for country, count in country_counts.most_common():
+    print("\nРейтинг стран по количеству пользователей-редакторов:")
+    for country, count in country_counter.most_common():
         print(f"{country}: {count}")
 
 
-# Пример использования
-wiki_url = "https://en.wikipedia.org/w/index.php?title=JSON&action=history"
-analyze_wikipedia_editors(wiki_url)
+if __name__ == "__main__":
+    main()
